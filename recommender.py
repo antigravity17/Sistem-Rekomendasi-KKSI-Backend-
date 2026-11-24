@@ -3,16 +3,19 @@ MODUL MESIN REKOMENDASI HYBRID (LAPISAN 2)
 Sistem Rekomendasi Laboratorium KKSI - Departemen Sistem Informasi UNAND
 
 Tujuan:
-Melakukan normalisasi DomainFixedScaler [0, 1] pada 23 fitur kompetensi,
-menghitung Cosine Similarity terhadap sentroid 4 lab KKSI, mengestimasi probabilitas
-XGBoost, dan memadukan skor komposit True Hybrid (0.5 * Cosine + 0.5 * XGBoost).
+1. Melakukan normalisasi DomainFixedScaler [0, 1] pada 23 fitur kompetensi.
+2. Menghitung Cosine Similarity terhadap sentroid 4 lab KKSI dan mengestimasi probabilitas XGBoost.
+3. Memadukan skor komposit True Hybrid (0.5 * Cosine + 0.5 * XGBoost).
+4. Menerapkan Eliminasi Spesifik Per Laboratorium (Targeted Lab Disqualification) sehingga
+   laboratorium yang prasyarat mata kuliahnya tidak terpenuhi otomatis dicoret dari opsi
+   Rekomendasi Utama (#1) maupun Pilihan Cadangan (#2) dan digeser ke urutan bawah.
 """
 
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Optional
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 
-from gatekeeper import normalize_input_keys, grade_to_numeric
+from gatekeeper import normalize_input_keys, grade_to_numeric, RuleGatekeeper
 
 # 23 Fitur Murni Kompetensi Sistem KKSI
 FEATURE_COLUMNS = [
@@ -118,18 +121,27 @@ def extract_raw_features(raw_data: Dict[str, Any]) -> np.ndarray:
 def compute_recommendations(
     bundle: Dict[str, Any],
     raw_input: Dict[str, Any],
-    alpha: float = 0.5
+    alpha: float = 0.5,
+    disqualified_labs: Optional[Dict[str, str]] = None
 ) -> Dict[str, Any]:
     """
     Menghitung inferensi rekomendasi dua lapis secara end-to-end:
     - Cosine Similarity terhadap sentroid profil 4 lab
     - Probabilitas prediksi XGBoost
     - Skor Komposit: alpha * Cosine + (1 - alpha) * XGBoost
+    - Pemeringkatan Terfilter: Laboratorium yang memenuhi prasyarat mata kuliah
+      ditempatkan di peringkat teratas (#1, #2), sedangkan laboratorium yang
+      tereliminasi (disqualified_labs) digeser ke urutan bawah.
     """
     scaler: DomainFixedScaler = bundle['scaler']
     centroids: np.ndarray = bundle['centroids']
     xgb_model = bundle['xgb_model']
     lab_classes: List[str] = bundle['lab_classes']
+
+    # Evaluasi otomatis disqualified_labs apabila fungsi dipanggil langsung
+    if disqualified_labs is None:
+        gk_eval = RuleGatekeeper().evaluate(raw_input)
+        disqualified_labs = gk_eval.get('disqualified_labs', {})
 
     # 1. Ekstraksi dan Normalisasi Vektor 23 Dimensi
     X_raw = extract_raw_features(raw_input)
@@ -144,14 +156,37 @@ def compute_recommendations(
     # 4. Penyatuan Skor Komposit True Hybrid (alpha = 0.5)
     composite_scores = (alpha * sims) + ((1.0 - alpha) * probs)
 
-    # 5. Pemeringkatan 4 Laboratorium (Urutan Tertinggi ke Terendah)
-    ranked_indices = np.argsort(-composite_scores)
+    # 5. Pemisahan Laboratorium Memenuhi Syarat vs Tereliminasi Prasyarat Mata Kuliah
+    raw_sorted_indices = np.argsort(-composite_scores)
+    qualified_indices = []
+    disqualified_indices = []
+
+    for idx in raw_sorted_indices:
+        full_lab_name = lab_classes[idx]
+        short_code = LAB_SHORT_NAME.get(full_lab_name, full_lab_name)
+        if short_code in disqualified_labs:
+            disqualified_indices.append(idx)
+        else:
+            qualified_indices.append(idx)
+
+    ordered_indices = qualified_indices + disqualified_indices
 
     rankings = []
-    for rank_pos, idx in enumerate(ranked_indices, start=1):
+    for rank_pos, idx in enumerate(ordered_indices, start=1):
         full_lab_name = lab_classes[idx]
         short_code = LAB_SHORT_NAME.get(full_lab_name, full_lab_name)
         clean_title = LAB_FULL_TITLE.get(short_code, full_lab_name)
+        is_disq = short_code in disqualified_labs
+        disq_reason = disqualified_labs.get(short_code) if is_disq else None
+
+        if is_disq:
+            match_label = 'Tereliminasi (Prasyarat)'
+        elif rank_pos == 1:
+            match_label = 'Sangat Cocok (Utama)'
+        elif rank_pos == 2:
+            match_label = 'Pilihan Cadangan Ideal'
+        else:
+            match_label = 'Cukup'
 
         rankings.append({
             'rank': rank_pos,
@@ -160,7 +195,9 @@ def compute_recommendations(
             'composite_score': round(float(composite_scores[idx]), 2),
             'cosine_similarity': round(float(sims[idx]), 2),
             'xgb_probability': round(float(probs[idx]), 2),
-            'match_label': 'Sangat Cocok (Utama)' if rank_pos == 1 else ('Pilihan Cadangan Ideal' if rank_pos == 2 else 'Cukup')
+            'match_label': match_label,
+            'is_disqualified': is_disq,
+            'disqualification_reason': disq_reason
         })
 
     # 6. Ringkasan Skor Indeks Kompetensi
@@ -174,10 +211,17 @@ def compute_recommendations(
         'domain_interest_score': round(float((np.mean(interest_scores) - 1.0) / 4.0 * 100.0), 1)
     }
 
+    # 7. Perhitungan Margin Keunggulan antara Peringkat #1 dan Peringkat #2 yang Memenuhi Syarat
+    if len(rankings) > 1 and not rankings[1]['is_disqualified']:
+        sep_margin = round(float(rankings[0]['composite_score'] - rankings[1]['composite_score']), 2)
+    else:
+        sep_margin = round(float(rankings[0]['composite_score']), 2)
+
     return {
         'primary_recommendation': rankings[0],
         'backup_recommendation': rankings[1],
         'all_rankings': rankings,
+        'disqualified_labs': disqualified_labs,
         'competency_profile': competency_profile,
-        'separation_margin': round(float(rankings[0]['composite_score'] - rankings[1]['composite_score']), 2)
+        'separation_margin': max(0.0, sep_margin)
     }

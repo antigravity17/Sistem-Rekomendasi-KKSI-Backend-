@@ -131,7 +131,12 @@ def predict():
         # ==============================================================
         # LAPISAN 2: HYBRID RECOMMENDATION ENGINE (Kalkulasi Afinitas & ML)
         # ==============================================================
-        rec_result = compute_recommendations(model_bundle, data, alpha=0.5)
+        rec_result = compute_recommendations(
+            model_bundle,
+            data,
+            alpha=0.5,
+            disqualified_labs=gk_eval.get('disqualified_labs', {})
+        )
 
         return jsonify({
             "success": True,
@@ -142,6 +147,7 @@ def predict():
             "primary_recommendation": rec_result['primary_recommendation'],
             "backup_recommendation": rec_result['backup_recommendation'],
             "rankings": rec_result['all_rankings'],
+            "disqualified_labs": rec_result['disqualified_labs'],
             "competency_profile": rec_result['competency_profile'],
             "separation_margin": rec_result['separation_margin']
         }), 200
