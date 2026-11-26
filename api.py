@@ -100,7 +100,7 @@ def predict():
             }), 500
 
     try:
-        data = request.get_json(force=True)
+        data = request.get_json(force=True, silent=True)
         if not data or not isinstance(data, dict):
             return jsonify({
                 "success": False,

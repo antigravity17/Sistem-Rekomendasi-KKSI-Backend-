@@ -26,11 +26,15 @@ def export_bundle():
     print("MEMULAI PROSES PELATIHAN & EKSPOR BUNDEL MODEL REKOMENDASI KKSI")
     print("=" * 80)
 
-    # 1. Lokasi Berkas Dataset 70 Data Asli Riil
+    # 1. Lokasi Berkas Dataset 70 Data Asli Riil (Dinamis & Portabel)
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    parent_dir = os.path.dirname(base_dir)
     dataset_candidates = [
-        os.path.join(os.path.dirname(__file__), 'Dataset_70_Asisten_Survei.xlsx'),
-        r'e:\Machine Learning\ini\Dataset_70_Asisten_Survei.xlsx',
-        r'e:\Machine Learning\Dataset_70_Asisten_Survei.xlsx'
+        os.path.join(base_dir, 'Dataset_70_Asisten_Survei.xlsx'),
+        os.path.join(base_dir, 'Dataset_70_Asisten_Survei.csv'),
+        os.path.join(parent_dir, 'ini', 'Dataset_70_Asisten_Survei.xlsx'),
+        os.path.join(parent_dir, 'Dataset_70_Asisten_Survei.xlsx'),
+        os.path.join(parent_dir, '..', 'ini', 'Dataset_70_Asisten_Survei.xlsx')
     ]
 
     dataset_path = None

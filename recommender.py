@@ -200,13 +200,16 @@ def compute_recommendations(
             'disqualification_reason': disq_reason
         })
 
-    # 6. Ringkasan Skor Indeks Kompetensi
+    # 6. Ringkasan Skor Indeks Kompetensi (Hanya merata-ratakan mata kuliah yang sudah ditempuh)
     academic_scores = X_raw[0, :11]
+    taken_academic = [s for s in academic_scores if s > 0.0]
+    mean_acad = np.mean(taken_academic) if len(taken_academic) > 0 else 0.0
+
     tool_scores = X_raw[0, 11:19]
     interest_scores = X_raw[0, 19:]
 
     competency_profile = {
-        'academic_competency_score': round(float(np.mean(academic_scores) / 4.0 * 100.0), 1),
+        'academic_competency_score': round(float(mean_acad / 4.0 * 100.0), 1),
         'technical_skills_score': round(float((np.mean(tool_scores) - 1.0) / 4.0 * 100.0), 1),
         'domain_interest_score': round(float((np.mean(interest_scores) - 1.0) / 4.0 * 100.0), 1)
     }
@@ -215,7 +218,8 @@ def compute_recommendations(
     if len(rankings) > 1 and not rankings[1]['is_disqualified']:
         sep_margin = round(float(rankings[0]['composite_score'] - rankings[1]['composite_score']), 2)
     else:
-        sep_margin = round(float(rankings[0]['composite_score']), 2)
+        # Saat 3 lab lain terdiskualifikasi (hanya 1 lab lolos), tidak ada margin kompetisi
+        sep_margin = 0.0
 
     return {
         'primary_recommendation': rankings[0],

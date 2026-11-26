@@ -10,6 +10,7 @@ Tujuan:
 3. Menggugurkan pendaftar secara total apabila seluruh 4 laboratorium tereliminasi.
 """
 
+import math
 import re
 from typing import Dict, Any, List
 import pandas as pd
@@ -148,10 +149,10 @@ CANONICAL_MAP = {
 
 
 def normalize_input_keys(data: Dict[str, Any]) -> Dict[str, Any]:
-    """Menyelaraskan kunci masukan agar sesuai nama atribut resmi."""
+    """Menyelaraskan kunci masukan agar sesuai nama atribut resmi (mendukung spasi & underscore)."""
     cleaned = {}
     for k, v in data.items():
-        k_clean = str(k).strip().lower()
+        k_clean = str(k).strip().lower().replace('_', ' ')
         canonical_k = CANONICAL_MAP.get(k_clean, k)
         cleaned[canonical_k] = v
     return cleaned
@@ -196,16 +197,17 @@ def is_unregistered(val: Any) -> bool:
 
 
 def parse_semester_number(sem_raw: Any) -> int:
-    """Mengekstrak angka semester (misal 'Semester 3' -> 3, 'Semester 5' -> 5)."""
+    """Mengekstrak angka semester bulat (misal 'Semester 3' -> 3, 'Semester 5' -> 5; menolak desimal)."""
     if sem_raw is None:
         return 0
-    if isinstance(sem_raw, (int, float)):
-        try:
-            return int(sem_raw)
-        except (ValueError, TypeError):
-            return 0
-    digits = re.findall(r'\d+', str(sem_raw))
-    return int(digits[0]) if digits else 0
+    sem_str = str(sem_raw).strip()
+    if '.' in sem_str or ',' in sem_str:
+        return 0
+    digits = re.findall(r'\b\d+\b', sem_str)
+    if digits:
+        val = int(digits[0])
+        return val if val in [3, 5] else 0
+    return 0
 
 
 class RuleGatekeeper:
@@ -277,16 +279,23 @@ class RuleGatekeeper:
             violations.append("Semester pendaftaran harus mahasiswa aktif Semester 3 atau Semester 5")
             reasons.append("Semester di luar ketentuan rekrutmen (wajib Semester 3 atau 5)")
 
-        # 2. Validasi IPK Kumulatif (Wajib >= 3.00)
+        # 2. Validasi IPK Kumulatif (Wajib >= 3.00 dan <= 4.00, tidak boleh NaN atau Inf)
         ipk_raw = data.get('IPK Kumulatif', 0.0)
         try:
             ipk = float(str(ipk_raw).replace(',', '.'))
         except (ValueError, TypeError):
             ipk = 0.0
 
-        if ipk < self.min_ipk:
-            violations.append(f"IPK Kumulatif ({ipk:.2f}) berada di bawah batas minimum kelayakan {self.min_ipk:.2f}")
-            reasons.append(f"IPK < {self.min_ipk:.2f}")
+        if math.isnan(ipk) or math.isinf(ipk) or ipk < self.min_ipk or ipk > 4.00:
+            if math.isnan(ipk) or math.isinf(ipk):
+                violations.append("Nilai IPK Kumulatif tidak valid (berupa NaN atau Tak Hingga)")
+                reasons.append("IPK tidak valid (NaN/Inf)")
+            elif ipk > 4.00:
+                violations.append(f"IPK Kumulatif ({ipk:.2f}) melebihi batas maksimum skala universitas (4.00)")
+                reasons.append("IPK > 4.00")
+            else:
+                violations.append(f"IPK Kumulatif ({ipk:.2f}) berada di bawah batas minimum kelayakan {self.min_ipk:.2f}")
+                reasons.append(f"IPK < {self.min_ipk:.2f}")
 
         # 3. Evaluasi Prasyarat Spesifik per Laboratorium (Targeted Disqualification)
         disqualified_labs = self.evaluate_lab_prerequisites(data, sem_num)
